@@ -1,0 +1,2 @@
+os
+PyPDF2
