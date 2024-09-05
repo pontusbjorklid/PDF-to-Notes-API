@@ -1,6 +1,21 @@
 from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
+from flask import Flask, request, send_file
 import math
 import os
+
+# Run using `python main.py` and visit http://
+
+app = Flask(__name__)
+
+UPLOAD_FOLDER = 'uploads'
+PROCESSED_FOLDER = 'processed'
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(PROCESSED_FOLDER):
+    os.makedirs(PROCESSED_FOLDER)
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def scale_and_place_page(input_page, target_width, target_height, x_offset, y_offset):
     """
@@ -95,25 +110,41 @@ def process_entire_pdf(input_pdf, output_pdf):
 
     print(f"Output PDF created successfully: {output_pdf}")
 
-def main():
-    """
-    Main function to execute the PDF processing. It sets the input PDF filename,
-    generates an appropriate output filename, and then processes the PDF to create 
-    a grid layout of the pages.
+@app.route('/process-pdf', methods=['GET', 'POST'])
+def process_pdf_api():
+    if request.method == 'POST':
+        # Handle file upload and PDF processing as before
+        if 'file' not in request.files:
+            return "No file part", 400
 
-    Parameters:
-    None
+        file = request.files['file']
+        
+        if file.filename == '':
+            return "No selected file", 400
 
-    Returns:
-    None
-    """
-    input_pdf = 'name.pdf'  #Path to your input PDF file
-    #Extract the base name of the file (without directory and extension)
-    base_name = os.path.splitext(os.path.basename(input_pdf))[0]
-    
-    #Construct the output filename
-    output_pdf = f"Notes - {base_name}.pdf"
-    process_entire_pdf(input_pdf, output_pdf)
+        if file:
+            filename = file.filename
+            input_pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(input_pdf_path)
 
-if __name__ == "__main__":
-    main()
+            output_pdf_path = os.path.join(PROCESSED_FOLDER, f"Notes - {filename}")
+            process_entire_pdf(input_pdf_path, output_pdf_path)
+
+            return send_file(output_pdf_path, as_attachment=True)
+    else:
+        # If it's a GET request, return a simple HTML form for file upload
+        return '''
+        <html>
+            <body>
+                <h1>Upload PDF</h1>
+                <form method="POST" enctype="multipart/form-data">
+                    <input type="file" name="file">
+                    <input type="submit" value="Upload">
+                </form>
+            </body>
+        </html>
+        '''
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
