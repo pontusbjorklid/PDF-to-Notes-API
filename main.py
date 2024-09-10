@@ -1,6 +1,5 @@
 from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
 from flask import Flask, request, send_file
-import math
 import os
 
 # Run using `python main.py` and visit http://
