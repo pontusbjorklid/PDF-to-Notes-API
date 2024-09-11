@@ -1,8 +1,9 @@
 from PyPDF2 import PdfReader, PdfWriter, PageObject, Transformation
 from flask import Flask, request, send_file
 import os
-
-# Run using `python main.py` and visit http://
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from io import BytesIO
 
 app = Flask(__name__)
 
@@ -20,90 +21,99 @@ def scale_and_place_page(input_page, target_width, target_height, x_offset, y_of
     """
     Scales a given PDF page to fit within a target area while maintaining the aspect ratio, 
     then places it within the specified position on a new blank page.
-
-    Parameters:
-    input_page (PageObject): The original PDF page to be scaled and placed.
-    target_width (float): The width of the target area in points.
-    target_height (float): The height of the target area in points.
-    x_offset (float): The horizontal offset where the scaled page should be placed on the new page.
-    y_offset (float): The vertical offset where the scaled page should be placed on the new page.
-
-    Returns:
-    PageObject: The new page with the scaled content placed at the specified offset.
-    float: The horizontal offset of the placed page (unused, returned for consistency).
-    float: The vertical offset of the placed page (unused, returned for consistency).
     """
-    #Calculate the scaling factor to maintain aspect ratio
     original_width = float(input_page.mediabox.width)
     original_height = float(input_page.mediabox.height)
     scale_x = target_width / original_width
     scale_y = target_height / original_height
     scale = min(scale_x, scale_y)
 
-    #Apply the scaling and translation to center the page within the target area
     transformation = Transformation().scale(scale).translate(
         tx=(target_width - original_width * scale) / 2,
         ty=(target_height - original_height * scale) / 2
     )
 
-    #Apply the transformation to the page
     input_page.add_transformation(transformation)
 
-    #Create a new blank page for the scaled content
     scaled_page = PageObject.create_blank_page(width=target_width, height=target_height)
     scaled_page.merge_page(input_page)
 
     return scaled_page, x_offset, y_offset
 
+def draw_grid_on_top(page_width, page_height):
+    """
+    Draws a vertical line at the center and three horizontal lines to create a 4x2 grid on the page.
+    
+    Returns:
+    BytesIO: A byte stream of the PDF content with the grid drawn on it.
+    """
+    # Create a PDF in memory
+    packet = BytesIO()
+    can = canvas.Canvas(packet, pagesize=A4)
+
+    # Draw the vertical line at the center of the page
+    center_x = page_width / 2
+    can.setStrokeColorRGB(0, 0, 0)  # Set line color to black
+    can.setLineWidth(1)  # Set line width
+    can.line(center_x, 0, center_x, page_height)  # Draw vertical line
+
+    # Draw horizontal lines to create 4 equal horizontal sections
+    section_height = page_height / 4
+    for i in range(1, 4):
+        y_position = section_height * i
+        can.line(0, y_position, page_width, y_position)  # Draw horizontal lines
+
+    # Finalize and save the canvas
+    can.save()
+
+    # Move the pointer to the beginning of the BytesIO buffer
+    packet.seek(0)
+    
+    return packet
+
 def process_entire_pdf(input_pdf, output_pdf):
     """
     Processes an entire PDF by scaling and placing pages into a 2x4 grid on an A4 page size.
     Each original page is scaled to fit into one quadrant of the A4-sized page, and the output
-    PDF contains these grid pages.
-
-    Parameters:
-    input_pdf (str): The path to the input PDF file to be processed.
-    output_pdf (str): The path to the output PDF file that will be created.
-
-    Returns:
-    None
+    PDF contains these grid pages with a vertical line in the middle and horizontal lines to create a 4x2 grid.
+    The grid lines are drawn on top of the inserted PDF content.
     """
     reader = PdfReader(input_pdf)
     writer = PdfWriter()
 
-    #Get the dimensions of A4 in points (since PyPDF2 works with points)
-    a4_width = 595.28  #210 mm in points
-    a4_height = 841.89  #297 mm in points
+    a4_width, a4_height = A4  # A4 dimensions in points
 
-    #Calculate the target size (1/8th of A4, for the quadrants of a 2x4 grid)
     target_width = a4_width / 2
     target_height = a4_height / 4
 
     num_pages = len(reader.pages)
 
-    #Iterate over all pages and add them to the grid
     for i in range(0, num_pages, 4):
-        #Create a new blank A4 page
+        # Create a new blank A4 page for the scaled content
         new_page = PageObject.create_blank_page(width=a4_width, height=a4_height)
 
-        #Process up to four pages per grid page
+        # Process up to four pages per grid page
         for quadrant in range(4):
             page_index = i + quadrant
             if page_index < num_pages:
                 input_page = reader.pages[page_index]
 
-                #Determine the position for each quadrant on the left side
                 x_offset = 0  # All on the left side
                 y_offset = a4_height - (quadrant + 1) * target_height
 
-                #Scale and place the page into the correct quadrant
+                # Scale and place the page into the correct quadrant
                 scaled_page, _, _ = scale_and_place_page(input_page, target_width, target_height, x_offset, y_offset)
                 new_page.mergeTranslatedPage(scaled_page, tx=x_offset, ty=y_offset)
 
-        #Add the grid page to the writer
+        # Now, draw the grid on top of the scaled PDF content
+        grid_pdf_stream = draw_grid_on_top(a4_width, a4_height)
+        grid_pdf_reader = PdfReader(grid_pdf_stream)
+        grid_page = grid_pdf_reader.pages[0]  # Use the page with the drawn grid
+        new_page.merge_page(grid_page)  # Merge the grid lines on top of the content
+
+        # Add the page with the grid and content to the writer
         writer.add_page(new_page)
 
-    #Save the output PDF
     with open(output_pdf, 'wb') as f:
         writer.write(f)
 
@@ -112,7 +122,6 @@ def process_entire_pdf(input_pdf, output_pdf):
 @app.route('/process-pdf', methods=['GET', 'POST'])
 def process_pdf_api():
     if request.method == 'POST':
-        # Handle file upload and PDF processing as before
         if 'file' not in request.files:
             return "No file part", 400
 
@@ -131,7 +140,6 @@ def process_pdf_api():
 
             return send_file(output_pdf_path, as_attachment=True)
     else:
-        # If it's a GET request, return a simple HTML form for file upload
         return '''
         <html>
             <body>
@@ -146,4 +154,3 @@ def process_pdf_api():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
